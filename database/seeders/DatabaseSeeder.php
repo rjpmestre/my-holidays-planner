@@ -16,6 +16,7 @@ class DatabaseSeeder extends Seeder
 
         $this->call([
             HolidayTypeSeeder::class,
+            VacationTypeSeeder::class,
             HolidaySeeder::class,
             BirthdaySeeder::class,
             VacationSeeder::class,

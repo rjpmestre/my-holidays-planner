@@ -13,6 +13,7 @@ class BirthdaySeeder extends Seeder
      */
     public function run(): void
     {
-        Birthday::Create(['date' => '2025-07-09', 'description' => 'Ricardo']);
+        // Add your birthdays here
+        // Example: Birthday::Create(['date' => '2025-07-09', 'description' => 'Name']);
     }
 }

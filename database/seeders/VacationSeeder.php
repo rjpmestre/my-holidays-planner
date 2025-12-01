@@ -13,20 +13,16 @@ class VacationSeeder extends Seeder
      */
     public function run(): void
     {
-        
-        Vacation::Create(['date' => '2025-04-21']);
-        Vacation::Create(['date' => '2025-04-22']);
-        Vacation::Create(['date' => '2025-04-23']);
-        Vacation::Create(['date' => '2025-04-24']);
-        Vacation::Create(['date' => '2025-04-28']);
+        Vacation::Create(['date' => '2025-02-28']);
         Vacation::Create(['date' => '2025-04-29']);
-        Vacation::Create(['date' => '2025-04-30']);
-        Vacation::Create(['date' => '2025-05-02']);
-        Vacation::Create(['date' => '2025-06-09']);
-        Vacation::Create(['date' => '2025-06-09']);
-        Vacation::Create(['date' => '2025-06-11']);
-        Vacation::Create(['date' => '2025-06-12']);
-        Vacation::Create(['date' => '2025-06-20']);
+        Vacation::Create(['date' => '2025-05-29']);
+        Vacation::Create(['date' => '2025-06-25']);
+
+        Vacation::Create(['date' => '2025-08-04']);
+        Vacation::Create(['date' => '2025-08-05']);
+        Vacation::Create(['date' => '2025-08-06']);
+        Vacation::Create(['date' => '2025-08-07']);
+        Vacation::Create(['date' => '2025-08-08']);
         Vacation::Create(['date' => '2025-08-11']);
         Vacation::Create(['date' => '2025-08-12']);
         Vacation::Create(['date' => '2025-08-13']);
@@ -36,5 +32,9 @@ class VacationSeeder extends Seeder
         Vacation::Create(['date' => '2025-08-20']);
         Vacation::Create(['date' => '2025-08-21']);
         Vacation::Create(['date' => '2025-08-22']);
+
+
+
+
     }
 }

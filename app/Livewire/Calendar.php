@@ -7,6 +7,8 @@ use Carbon\Carbon;
 use App\Models\Holiday;
 use App\Models\Birthday;
 use App\Models\Vacation;
+use App\Models\VacationType;
+use App\Models\VacationSettings;
 use Livewire\Attributes\Url;
 use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\On;
@@ -19,11 +21,23 @@ class Calendar extends Component
     // related to PT laws
     public $maxVacationDays = 22;
     public $minConsecutiveVacationDays = 10;
+    public $maxVolunteerDays = 1; // Volunteer day per year
+
+    public $manualCarriedDays = 0; // Manual input for carried days from previous year (no limit)
 
     public $totalDaysSelected = 0;
+    public $regularDaysCount = 0;
+    public $carriedDaysCount = 0;
+    public $volunteerDaysCount = 0;
+    public $bonusDaysCount = 0;
 
     public $selectableDates = [];
     public $selectedDays = [];
+    public $vacationDetails = []; // Store vacation data as arrays [date => ['date', 'type_id', 'year_carried_from']]
+
+    public $selectedDayForTypeChange = null; // Track which day is being edited
+    public $editingLimit = null; // Track which limit is being edited: 'regular', 'carried', 'volunteer'
+    public $tempLimitValue = 0; // Temporary value while editing
 
     public $holidays = [];
     public $holidayGroups = [];
@@ -33,11 +47,12 @@ class Calendar extends Component
     public $warnings = [];
 
     public function mount() {
-        $this->currentYear = $this->currentYear ?? Carbon::now()->year + 1;
+        $this->currentYear = $this->currentYear ?? Carbon::now()->year;
         $this->loadData();
     }
 
     protected function loadData() {
+        $this->loadSettings();
         $this->loadHolidays();
         $this->loadSelectedDays();
         $this->loadHolidayGroups();
@@ -45,6 +60,35 @@ class Calendar extends Component
         $this->loadBirthdays();
         $this->loadSelectableDates();
         // dd($this->holidays, $this->weekends, $this->birthdays);
+    }
+
+    protected function loadSettings() {
+        $settings = VacationSettings::firstOrCreate(
+            ['year' => $this->currentYear],
+            [
+                'max_vacation_days' => 22,
+                'max_volunteer_days' => 1,
+                'manual_carried_days' => 0,
+                'min_consecutive_vacation_days' => 10,
+            ]
+        );
+
+        $this->maxVacationDays = $settings->max_vacation_days;
+        $this->maxVolunteerDays = $settings->max_volunteer_days;
+        $this->manualCarriedDays = $settings->manual_carried_days;
+        $this->minConsecutiveVacationDays = $settings->min_consecutive_vacation_days;
+    }
+
+    protected function saveSettings() {
+        VacationSettings::updateOrCreate(
+            ['year' => $this->currentYear],
+            [
+                'max_vacation_days' => $this->maxVacationDays,
+                'max_volunteer_days' => $this->maxVolunteerDays,
+                'manual_carried_days' => $this->manualCarriedDays,
+                'min_consecutive_vacation_days' => $this->minConsecutiveVacationDays,
+            ]
+        );
     }
 
     protected function loadHolidays() {
@@ -65,13 +109,33 @@ class Calendar extends Component
     }
 
     protected function loadSelectedDays() {
-        $this->selectedDays = Vacation::whereYear('date', $this->currentYear)
-            ->pluck('date')
+        $vacations = Vacation::whereYear('date', $this->currentYear)
+            ->with('type')
+            ->get();
+
+        $this->selectedDays = $vacations->pluck('date')
             ->map(function ($date) {
                 return Carbon::parse($date)->format('Y-m-d');
             })->toArray();
 
+        // Store vacation details as simple arrays (Livewire-friendly)
+        $this->vacationDetails = [];
+        foreach ($vacations as $vacation) {
+            $date = Carbon::parse($vacation->date)->format('Y-m-d');
+            $this->vacationDetails[$date] = [
+                'date' => $date,
+                'type_id' => $vacation->type_id,
+                'year_carried_from' => $vacation->year_carried_from
+            ];
+        }
+
         $this->totalDaysSelected = count($this->selectedDays);
+
+        // Count by type
+        $this->regularDaysCount = $vacations->where('type_id', 1)->count();
+        $this->carriedDaysCount = $vacations->where('type_id', 2)->count();
+        $this->volunteerDaysCount = $vacations->where('type_id', 3)->count();
+        $this->bonusDaysCount = $vacations->where('type_id', 4)->count();
     }
 
     protected function loadHolidayGroups() {
@@ -113,7 +177,6 @@ class Calendar extends Component
         }
     }
 
-
     public function getClasses($date) {
         if (in_array($date, $this->selectedDays)){
             return implode(' ', ['bg-warning', 'font-weight-bold']);
@@ -136,16 +199,96 @@ class Calendar extends Component
         return 'selectable_day';
     }
 
-    public function toggleDay($date) {
+    public function toggleDay($date, $typeId = 1) {
         if (!$this->isSelectableDate($date)) {
             return;
         }
 
         if (in_array($date, $this->selectedDays)) {
+            // Remove day
             $this->selectedDays = array_diff($this->selectedDays, [$date]);
-        } else{
+            unset($this->vacationDetails[$date]);
+            \Log::alert("Removed day: {$date}, selectedDays count: " . count($this->selectedDays) . ", vacationDetails count: " . count($this->vacationDetails));
+        } else {
+            // Add day
             $this->selectedDays[] = $date;
+
+            // Store vacation details as simple array (Livewire-friendly)
+            $this->vacationDetails[$date] = [
+                'date' => $date,
+                'type_id' => $typeId,
+                'year_carried_from' => $typeId == 2 ? $this->currentYear - 1 : null
+            ];
+
+            \Log::alert("Added day: {$date}, typeId: {$typeId}, selectedDays count: " . count($this->selectedDays) . ", vacationDetails count: " . count($this->vacationDetails));
         }
+
+        // Force re-index the array to avoid gaps
+        $this->selectedDays = array_values($this->selectedDays);
+    }
+
+    public function changeVacationType($date, $typeId) {
+        if (isset($this->vacationDetails[$date])) {
+            // Update vacation details array
+            $this->vacationDetails[$date]['type_id'] = $typeId;
+            $this->vacationDetails[$date]['year_carried_from'] = $typeId == 2 ? $this->currentYear - 1 : null;
+
+            $this->dispatch('toast', ['type' => 'success', 'message' => 'Tipo de férias alterado!']);
+        }
+    }
+
+    public function setManualCarriedDays() {
+        if ($this->manualCarriedDays < 0) {
+            $this->manualCarriedDays = 0;
+        }
+
+        $this->dispatch('toast', [
+            'type' => 'success',
+            'message' => 'Pode selecionar '.$this->manualCarriedDays.' dias transportados. Selecione os dias e altere o tipo para "Transportado".'
+        ]);
+    }
+
+    public function editLimit($type) {
+        $this->editingLimit = $type;
+
+        switch($type) {
+            case 'regular':
+                $this->tempLimitValue = $this->maxVacationDays;
+                break;
+            case 'carried':
+                $this->tempLimitValue = $this->manualCarriedDays;
+                break;
+            case 'volunteer':
+                $this->tempLimitValue = $this->maxVolunteerDays;
+                break;
+        }
+    }
+
+    public function saveLimit() {
+        if ($this->tempLimitValue < 0) {
+            $this->tempLimitValue = 0;
+        }
+
+        switch($this->editingLimit) {
+            case 'regular':
+                $this->maxVacationDays = $this->tempLimitValue;
+                break;
+            case 'carried':
+                $this->manualCarriedDays = $this->tempLimitValue;
+                break;
+            case 'volunteer':
+                $this->maxVolunteerDays = $this->tempLimitValue;
+                break;
+        }
+
+        $this->saveSettings();
+        $this->editingLimit = null;
+        $this->dispatch('toast', ['type' => 'success', 'message' => 'Limite atualizado!']);
+    }
+
+    public function cancelEdit() {
+        $this->editingLimit = null;
+        $this->tempLimitValue = 0;
     }
 
     public function isNationalHoliday($date) {
@@ -191,13 +334,25 @@ class Calendar extends Component
 
     public function clearVacationDays() {
         $this->selectedDays = [];
+        $this->vacationDetails = [];
     }
 
     public function saveVacationDays(){
         Vacation::whereYear('date', $this->currentYear)->delete();
         foreach ($this->selectedDays as $day) {
-            Vacation::create(['date' => $day]);
+            $typeId = $this->vacationDetails[$day]['type_id'] ?? 1;
+            $yearCarriedFrom = $this->vacationDetails[$day]['year_carried_from'] ?? null;
+
+            Vacation::create([
+                'date' => $day,
+                'type_id' => $typeId,
+                'year_carried_from' => $yearCarriedFrom,
+            ]);
         }
+
+        // Reload data after saving to ensure UI is in sync with database
+        $this->loadSelectedDays();
+
         $this->dispatch('toast', ['type' => 'success', 'message' => 'Calendário guardado com sucesso!']);
     }
 
@@ -212,20 +367,66 @@ class Calendar extends Component
     }
 
     public function render() {
+        // Recalculate counts from vacationDetails
         $this->totalDaysSelected = count($this->selectedDays);
+
+        // Count vacation types from vacationDetails array
+        $this->regularDaysCount = 0;
+        $this->carriedDaysCount = 0;
+        $this->volunteerDaysCount = 0;
+        $this->bonusDaysCount = 0;
+
+        Log::alert("render() called - vacationDetails count: " . count($this->vacationDetails) . ", selectedDays count: " . count($this->selectedDays));
+
+        foreach ($this->vacationDetails as $date => $vacationData) {
+            $typeId = $vacationData['type_id'];
+            Log::debug("Processing vacation for date {$date}, type_id: {$typeId}");
+            switch ($typeId) {
+                case 1:
+                    $this->regularDaysCount++;
+                    break;
+                case 2:
+                    $this->carriedDaysCount++;
+                    break;
+                case 3:
+                    $this->volunteerDaysCount++;
+                    break;
+                case 4:
+                    $this->bonusDaysCount++;
+                    break;
+            }
+        }
+
+        Log::debug("Final counts - Regular: {$this->regularDaysCount}, Carried: {$this->carriedDaysCount}, Volunteer: {$this->volunteerDaysCount}, Bonus: {$this->bonusDaysCount}");
+
         $this->checkWarnings();
         return view('livewire.calendar');
     }
 
     public function checkWarnings() {
         $this->warnings = [];
-        if ($this->totalDaysSelected > $this->maxVacationDays) {
-            $this->warnings[] = 'O número de dias de férias selecionados excede o limite de '.$this->maxVacationDays.' dias.';
+
+        // Check regular vacation days limit
+        if ($this->regularDaysCount > $this->maxVacationDays) {
+            $this->warnings[] = 'O número de dias de férias regulares selecionados ('.$this->regularDaysCount.') excede o limite de '.$this->maxVacationDays.' dias.';
         }
+
+        // Check carried days limit only if manual input is set
+        if ($this->manualCarriedDays > 0 && $this->carriedDaysCount > $this->manualCarriedDays) {
+            $this->warnings[] = 'O número de dias transportados ('.$this->carriedDaysCount.') excede o limite definido de '.$this->manualCarriedDays.' dias.';
+        }
+
+        // Check volunteer days limit
+        if ($this->volunteerDaysCount > $this->maxVolunteerDays) {
+            $this->warnings[] = 'Só pode selecionar '.$this->maxVolunteerDays.' dia de voluntariado por ano.';
+        }
+
+        // Check consecutive vacation days (only for regular vacation days)
         if (!$this->hasConsecutiveVacationDays($this->minConsecutiveVacationDays)) {
             $this->warnings[] = 'O gozo do período de férias pode ser interpolado, por acordo entre empregador e trabalhador, desde que
 sejam gozados, no mínimo, 10 dias úteis consecutivo.';
         }
+
         log::alert('checkWarnings : '.count($this->warnings));
     }
 
@@ -269,7 +470,19 @@ sejam gozados, no mínimo, 10 dias úteis consecutivo.';
         }
 
         // Add the bridge days to the selected vacation days
-        $this->selectedDays = array_merge($this->selectedDays, $daysToFill);
+        foreach ($daysToFill as $bridgeDay) {
+            if (!in_array($bridgeDay, $this->selectedDays)) {
+                $this->selectedDays[] = $bridgeDay;
+
+                // Add to vacationDetails with default type (regular vacation)
+                $this->vacationDetails[$bridgeDay] = [
+                    'date' => $bridgeDay,
+                    'type_id' => 1, // Regular vacation
+                    'year_carried_from' => null
+                ];
+            }
+        }
+
         $this->dispatch('toast', ['type' => 'success', 'message' => 'Pontes até '.$maxDays.' dias selecionadas.']);
     }
 
@@ -318,6 +531,13 @@ sejam gozados, no mínimo, 10 dias úteis consecutivo.';
 
         // If no such block of days is found, return false
         return false;
+    }
+
+    public function getVacationType($date) {
+        if (isset($this->vacationDetails[$date])) {
+            return VacationType::find($this->vacationDetails[$date]['type_id']);
+        }
+        return null;
     }
 
 }
